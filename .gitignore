@@ -1,0 +1,11 @@
+dataset/real/*
+dataset/ai/*
+dataset/edited/*
+!dataset/*/.gitkeep
+results/*
+!results/.gitkeep
+vendor/
+cache/
+__pycache__/
+*.pyc
+.pytest_cache/
