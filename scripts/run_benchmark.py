@@ -131,7 +131,7 @@ def main(argv: list[str] | None = None) -> pathlib.Path:
 
     out_dir = args.out / args.run_id
     out_dir.mkdir(parents=True, exist_ok=True)
-    cols = (["id", "label", "generator", "edit", "source", "parent_id", "width", "height", "error"]
+    cols = (["id", "label", "generator", "edit", "source", "parent_id", "pair_key", "width", "height", "format", "file_bytes", "has_exif", "error"]
             + [f"{n}_score" for n in names] + [f"{n}_ms" for n in names]
             + (["ensemble_score", "ensemble_verdict"] if full else []))
     t_start = time.time()
@@ -140,9 +140,12 @@ def main(argv: list[str] | None = None) -> pathlib.Path:
         w.writeheader()
         for i, r in enumerate(rows, 1):
             rec = {"id": r.id, "label": r.label, "generator": r.generator, "edit": r.edit,
-                   "source": r.source, "parent_id": r.parent_id, "error": ""}
+                   "source": r.source, "parent_id": r.parent_id, "pair_key": r.pair_key, "error": ""}
             try:
-                img = Image.open(args.dataset / r.path).convert("RGB")  # mesmo carregamento de api.py
+                fpath = args.dataset / r.path
+                raw = Image.open(fpath)
+                rec["format"], rec["file_bytes"], rec["has_exif"] = raw.format, fpath.stat().st_size, int(bool(raw.getexif()))
+                img = raw.convert("RGB")  # mesmo carregamento de api.py (Image.open(...).convert("RGB"))
                 rec["width"], rec["height"] = img.size
                 if full:
                     res = score_image(img, detectors=dets)

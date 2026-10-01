@@ -32,13 +32,15 @@ license = "CC BY 2.0 (por imagem)"
 
 # RAISE-1k (TIFF/RAW, sem compressão) é o par real recomendado do Synthbuster:
 # baixe em http://loki.disi.unitn.it/RAISE/download.html e aponte local_dir.
-# [[source]]
-# name = "raise1k"
-# label = "real"
-# kind = "local_dir"
-# path = "~/eval/raise1k_png"
-# n = 150
-# generator = "camera:raise-1k"
+# Atenção: são imagens de dezenas de MP (centenas de MB cada em TIFF).
+[[source]]
+name = "raise1k"
+label = "real"
+kind = "local_dir"
+path = "~/eval/raise1k"
+n = 0                         # ignorado quando a fonte participa de [pairing]
+generator = "camera:raise-1k"
+license = "ver termos do RAISE"
 
 # ---------- IA (vários geradores) ----------
 # Synthbuster (Zenodo, DOI 10.5281/zenodo.10066047): 1000 imagens por gerador
@@ -50,8 +52,19 @@ label = "ai"
 kind = "local_dir"
 path = "~/eval/synthbuster"
 generator_from = "parent_dir"
-n = 40                        # POR gerador
+n = 40                        # POR gerador; ignorado quando a fonte participa de [pairing]
 license = "verificar no Zenodo"
+
+# Pareamento Synthbuster <-> RAISE-1k. O Synthbuster foi gerado a partir de DESCRIÇÕES das imagens
+# do RAISE-1k, então o par compartilha tema/conteúdo (não é a mesma imagem). Escolhe-se UM conjunto
+# de chaves presente no real e em TODOS os geradores; os mesmos pares valem para todos eles.
+# A chave padrão é o nome do arquivo sem extensão. Se os nomes não coincidirem, passe um CSV
+# (colunas ai_key,real_key). NÃO verifiquei a nomenclatura real dos arquivos: confira.
+[pairing]
+real_source = "raise1k"
+ai_sources = ["synthbuster"]
+n_pairs = 100
+# map_csv = "~/eval/synthbuster_to_raise.csv"
 
 # Complemento "in the wild": imagens de IA que você mesmo coletou (redes sociais etc.).
 # [[source]]
