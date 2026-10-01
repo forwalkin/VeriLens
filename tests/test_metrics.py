@@ -56,3 +56,25 @@ def test_wilson_ci_bounds():
     assert 0.40 < lo < 0.41 and 0.59 < hi < 0.60
     assert wilson_ci(0, 10)[0] == 0.0 and wilson_ci(10, 10)[1] == 1.0
     assert np.isnan(wilson_ci(0, 0)[0])
+
+
+def test_cluster_bootstrap_wider_than_naive_when_clusters_repeat():
+    from evalkit.metrics import cluster_bootstrap_auc_ci
+    rng = np.random.default_rng(3)
+    # 10 pais por classe, cada um repetido 10x com ruído mínimo => 100 obs, só 10 independentes
+    pos = np.repeat(rng.normal(0.6, 0.2, 10), 10) + rng.normal(0, 0.01, 100)
+    neg = np.repeat(rng.normal(0.4, 0.2, 10), 10) + rng.normal(0, 0.01, 100)
+    pc, nc = np.repeat(np.arange(10), 10), np.repeat(np.arange(10, 20), 10)
+    y = np.array([1] * 100 + [0] * 100)
+    s = np.concatenate([pos, neg])
+    naive = bootstrap_auc_ci(y, s, n_boot=400)
+    clus = cluster_bootstrap_auc_ci(pos, neg, pc, nc, n_boot=400)
+    assert (clus[1] - clus[0]) > (naive[1] - naive[0])
+
+
+def test_paired_win_rate():
+    from evalkit.metrics import paired_win_rate
+    m, lo, hi = paired_win_rate([0.9, 0.8, 0.7, 0.2], [0.1, 0.2, 0.3, 0.5], n_boot=200)
+    assert m == 0.75 and lo <= m <= hi
+    assert paired_win_rate([0.5, 0.5], [0.5, 0.5])[0] == 0.5
+    assert np.isnan(paired_win_rate([0.5], [0.5, 0.4])[0])

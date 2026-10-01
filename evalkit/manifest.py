@@ -7,10 +7,10 @@ import hashlib
 import pathlib
 from dataclasses import asdict, dataclass, fields
 
-LABELS = ("real", "ai", "edited")
+LABELS = ("real", "ai", "edited", "ai_edited")
 FIELDS = [
     "id", "path", "label", "source", "generator", "license",
-    "parent_id", "edit", "notes",
+    "parent_id", "edit", "notes", "pair_key",
 ]
 
 
@@ -18,18 +18,19 @@ FIELDS = [
 class Row:
     id: str
     path: str  # relativo à raiz do dataset
-    label: str  # real | ai | edited
+    label: str  # real | ai | edited (real editada) | ai_edited (IA editada)
     source: str  # nome da fonte em sources.toml
     generator: str = ""  # IA: modelo gerador; real: origem/câmera quando conhecida
     license: str = ""
     parent_id: str = ""  # edited: id da imagem real de origem
     edit: str = ""  # edited: nome da edição
     notes: str = ""
+    pair_key: str = ""  # chave de pareamento real<->IA (ex.: RAISE-1k <-> Synthbuster)
 
     @property
     def is_ai(self) -> bool:
-        """Verdade-terreno binária. 'edited' = real editada, portanto negativa."""
-        return self.label == "ai"
+        """Verdade-terreno binária. 'edited' = real editada (negativa); 'ai_edited' = IA editada (positiva)."""
+        return self.label in ("ai", "ai_edited")
 
 
 def sha256_file(path: pathlib.Path) -> str:

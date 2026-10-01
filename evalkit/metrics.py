@@ -108,3 +108,53 @@ def wilson_ci(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     c = (p + z**2 / (2 * n)) / d
     h = z * np.sqrt(p * (1 - p) / n + z**2 / (4 * n**2)) / d
     return float(max(0.0, c - h)), float(min(1.0, c + h))
+
+
+def cluster_bootstrap_auc_ci(
+    pos: np.ndarray,
+    neg: np.ndarray,
+    pos_clusters: np.ndarray,
+    neg_clusters: np.ndarray,
+    n_boot: int = 1000,
+    alpha: float = 0.05,
+    seed: int = 0,
+) -> tuple[float, float]:
+    """IC do AUC reamostrando CLUSTERS (ex.: imagem-pai) dentro de cada classe.
+
+    Necessário quando a mesma foto-pai aparece em várias edições (observações não independentes).
+    """
+    pos, neg = np.asarray(pos, float), np.asarray(neg, float)
+    pc, nc = np.asarray(pos_clusters), np.asarray(neg_clusters)
+    if len(pos) == 0 or len(neg) == 0:
+        return float("nan"), float("nan")
+
+    def groups(vals, cl):
+        out: dict = {}
+        for v, c in zip(vals, cl):
+            out.setdefault(c, []).append(v)
+        return [np.array(v) for v in out.values()]
+
+    gp, gn = groups(pos, pc), groups(neg, nc)
+    rng = np.random.default_rng(seed)
+    vals = np.empty(n_boot)
+    for i in range(n_boot):
+        p = np.concatenate([gp[j] for j in rng.integers(0, len(gp), len(gp))])
+        n = np.concatenate([gn[j] for j in rng.integers(0, len(gn), len(gn))])
+        vals[i] = auc(np.concatenate([np.ones(len(p)), np.zeros(len(n))]), np.concatenate([p, n]))
+    return float(np.quantile(vals, alpha / 2)), float(np.quantile(vals, 1 - alpha / 2))
+
+
+def paired_win_rate(
+    ai: np.ndarray, real: np.ndarray, n_boot: int = 1000, alpha: float = 0.05, seed: int = 0
+) -> tuple[float, float, float]:
+    """P(score_IA > score_real) dentro de pares correspondentes (empate vale 0.5) e IC por bootstrap de pares.
+
+    0.5 = o detector não ordena corretamente o par; 1.0 = sempre ordena a IA acima da real.
+    """
+    ai, real = np.asarray(ai, float), np.asarray(real, float)
+    if len(ai) == 0 or len(ai) != len(real):
+        return float("nan"), float("nan"), float("nan")
+    w = (ai > real).astype(float) + 0.5 * (ai == real)
+    rng = np.random.default_rng(seed)
+    boots = np.array([w[rng.integers(0, len(w), len(w))].mean() for _ in range(n_boot)])
+    return float(w.mean()), float(np.quantile(boots, alpha / 2)), float(np.quantile(boots, 1 - alpha / 2))

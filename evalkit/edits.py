@@ -132,3 +132,13 @@ EXT = {"JPEG": ".jpg", "PNG": ".png"}
 def apply_edit(name: str, im: Image.Image, seed: int):
     """Aplica a edição *name* de forma determinística (mesmo seed => mesma saída)."""
     return EDITS[name](im.convert("RGB"), np.random.default_rng(seed))
+
+
+# Grupos usados no relatório de robustez (agrupamento operacional, não taxonomia científica).
+EDIT_GROUPS: dict[str, tuple[str, ...]] = {
+    "compressao": ("jpeg_q75", "jpeg_q50", "jpeg_q30", "social_1080_q70"),
+    "geometria": ("resize_50", "down_up_2x", "crop_center_70", "crop_random_60", "screenshot_sim"),
+    "tonal_filtros": ("brightness_contrast", "saturation_150", "warm_tone", "grayscale",
+                      "sepia", "vignette", "blur_r2", "sharpen"),
+}
+assert sorted(sum(EDIT_GROUPS.values(), ())) == sorted(EDITS), "toda edição deve estar em um grupo"
