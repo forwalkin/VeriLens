@@ -17,19 +17,37 @@ em cada gerador com n ≥ 30, nos grupos de edição, e sem sinal de confundidor
 se algum gerador relevante estiver próximo do acaso. Frequency e CLIP **não são descartados** só pelo global:
 a regra separa "manter para investigação / recalibrar / descartar" com as evidências listadas (ADR 0002).
 
-## Uso
+## Uso (em etapas; não pule a inspeção)
 
 ```bash
 pip install -r requirements.txt
-bash scripts/setup_base.sh                 # clona o base no commit fixado e instala (torch etc.)
-cp sources.example.toml sources.toml       # ajuste caminhos/fontes (veja avisos no arquivo)
+bash scripts/setup_base.sh                         # base no commit 4ec7edc + dependências (torch etc.)
+
+# 1) INSPEÇÃO do Synthbuster sem baixar os 12,4 GB (lê só o índice do ZIP por HTTP Range)
+python scripts/inspect_synthbuster.py              # -> dataset/inspection/synthbuster_inspection.{json,md}
+#    Confira: pastas, nomes de arquivo, identificadores, relação com prompts.csv, seleção parcial.
+#    Cole o resultado em docs/sources.md e ajuste [pairing]/map_csv se os nomes não casarem com o RAISE-1k.
+
+# 2) Dataset (só os arquivos selecionados são transferidos; kind="remote_zip")
+cp sources.example.toml sources.toml               # ajuste caminhos/fontes
 python scripts/build_dataset.py --sources sources.toml
-python scripts/make_edited.py --per-edit 30   # real editada + IA editada (robustez)
-python scripts/audit_dataset.py            # confundidores: formato, resolução, EXIF
-python scripts/run_benchmark.py            # exige base limpa no commit fixado
-python scripts/report.py results/<run_id>  # report.md + score_distributions.png
-pytest -q                                  # testes de métricas, edições e do encanamento
+python scripts/make_edited.py --per-edit 30        # real editada + IA editada (robustez)
+python scripts/audit_dataset.py                    # confundidores: formato, resolução, EXIF
+
+# 3) Benchmark PEQUENO de validação (verifica o pipeline com os modelos reais; ~poucas dezenas de imagens)
+python scripts/run_benchmark.py --sample-per-group 2 --run-id validation
+python scripts/sanity_check.py results/validation  # sem erros, scores em [0,1], ensemble == média ponderada, determinismo
+python scripts/report.py results/validation        # NÃO interpretar como resultado: n minúsculo
+
+# 4) Benchmark COMPLETO, só se a validação estiver coerente
+python scripts/run_benchmark.py
+python scripts/sanity_check.py results/<run_id>
+python scripts/report.py results/<run_id>          # report.md + score_distributions.png
+pytest -q
 ```
+
+`--sample-per-group N` seleciona até N imagens por (rótulo, gerador|edição) com seed fixa. `--run-id` evita
+misturar a validação com o run completo.
 
 ## Dataset
 
@@ -42,7 +60,8 @@ AUC fica em torno de ±0,05; com n=30, ±0,10 — diferenças pequenas entre ger
 Por edição individual (n=30 por classe) os ICs são largos: use os grupos (compressão, geometria, tonal).
 
 Fontes sugeridas (conferir licença e estrutura antes de usar):
-- **IA:** Synthbuster (Zenodo, 10.5281/zenodo.10066047): DALL·E 2/3, Firefly, Midjourney v5, SD 1.3/1.4/2/XL, GLIDE.
+- **IA:** Synthbuster (https://zenodo.org/records/10066460, DOI 10.5281/zenodo.10066460, CC BY-NC-SA 4.0):
+  9 geradores × 1000 imagens, ~12,4 GB. Ver `docs/sources.md`.
 - **Real:** RAISE-1k (par recomendado do Synthbuster), COCO val2017 e, principalmente, **fotos suas**
   de câmeras/celulares variados.
 - **Pareamento:** `[pairing]` em `sources.toml` escolhe UM conjunto de chaves (nome de arquivo sem extensão,
@@ -70,7 +89,8 @@ na interpretação. Possível sobreposição entre o treino do `Organika/sdxl-de
 ## Licenças
 
 Projeto-base: MIT. `Organika/sdxl-detector`: CC BY-NC 3.0 (uso não comercial, com atribuição).
-Respeite as licenças de cada fonte de imagens.
+Synthbuster: CC BY-NC-SA 4.0 (não comercial, mesma licença em derivados; não redistribuir o dataset/edições).
+RAISE-1k: pesquisa e educação não comercial. Respeite as licenças de cada fonte de imagens.
 
 ## Estado do repositório / permissões
 

@@ -57,6 +57,15 @@ def _zip(src: dict, cache: pathlib.Path):
     return items, lambda ref: zf.read(ref)
 
 
+def _remote_zip(src: dict):
+    """ZIP remoto lido por HTTP Range: só o índice e os membros escolhidos são transferidos (sem baixar o ZIP todo)."""
+    from evalkit.remotezip import open_remote_zip  # import tardio
+
+    zf, _ = open_remote_zip(src["url"])
+    items = [(n, n) for n in zf.namelist() if pathlib.PurePosixPath(n).suffix.lower() in IMG_EXT]
+    return items, lambda ref: zf.read(ref)
+
+
 def _hf(src: dict, n: int, seed: int):
     from datasets import Image as HFImage, load_dataset  # import tardio: dependência opcional
 
@@ -138,6 +147,8 @@ def main(argv: list[str] | None = None) -> None:
             items, read = _local(src)
         elif kind == "url_zip":
             items, read = _zip(src, pathlib.Path("cache"))
+        elif kind == "remote_zip":
+            items, read = _remote_zip(src)
         elif kind == "hf_dataset":
             items, read = _hf(src, src["n"], args.seed)
         else:

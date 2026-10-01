@@ -24,7 +24,7 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
-from evalkit.manifest import manifest_digest, read_manifest  # noqa: E402
+from evalkit.manifest import manifest_digest, read_manifest, stratified_sample  # noqa: E402
 
 EXPECTED_BASE_COMMIT = "4ec7edc"
 DETECTORS = ("frequency", "clip_drift", "hf_classifier")
@@ -59,7 +59,10 @@ def base_info(allow_dirty: bool) -> dict:
         sys.exit("base com alterações locais: o benchmark exige a implementação original")
     cal = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()[:12]
            for p in sorted((repo / "calibration").glob("*.np*"))}
-    return {"base_commit": commit, "base_dirty": dirty, "calibration_sha256": cal}
+    from ai_image_scanner import config
+
+    weights = {"frequency": config.WEIGHT_FREQUENCY, "clip_drift": config.WEIGHT_CLIP, "hf_classifier": config.WEIGHT_CLASSIFIER}
+    return {"base_commit": commit, "base_dirty": dirty, "calibration_sha256": cal, "weights": weights}
 
 
 def env_info() -> dict:
@@ -111,6 +114,10 @@ def main(argv: list[str] | None = None) -> pathlib.Path:
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("results"))
     ap.add_argument("--detectors", default=",".join(DETECTORS), help="subconjunto (smoke tests)")
     ap.add_argument("--limit", type=int, default=0, help="processa só as N primeiras (depuração)")
+    ap.add_argument("--sample-per-group", type=int, default=0,
+                    help="validação pequena: até N imagens por (rótulo, gerador|edição), seed fixa")
+    ap.add_argument("--determinism-check", type=int, default=3,
+                    help="re-pontua as N primeiras imagens e registra a maior diferença (0 desliga)")
     ap.add_argument("--allow-dirty", action="store_true")
     ap.add_argument("--run-id", default=datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"))
     args = ap.parse_args(argv)
@@ -122,6 +129,9 @@ def main(argv: list[str] | None = None) -> pathlib.Path:
             "manifest_digest": manifest_digest(args.dataset / "manifest.csv")}
 
     rows = read_manifest(args.dataset / "manifest.csv")
+    if args.sample_per_group:
+        rows = stratified_sample(rows, args.sample_per_group)
+        meta["kind"] = "SMALL-VALIDATION" if full else meta["kind"]
     if args.limit:
         rows = rows[: args.limit]
 
@@ -161,6 +171,20 @@ def main(argv: list[str] | None = None) -> pathlib.Path:
             f.flush()
             if i % 25 == 0 or i == len(rows):
                 print(f"[{i}/{len(rows)}] {time.time() - t_start:.0f}s", flush=True)
+    if args.determinism_check and full:
+        diffs = []
+        for r in rows[: args.determinism_check]:
+            try:
+                img = Image.open(args.dataset / r.path).convert("RGB")
+                first = {n: None for n in names}
+                res = score_image(img, detectors=dets)
+                for n, d in dets.items():
+                    first[n] = d.last_score
+                res2 = score_image(img, detectors=dets)
+                diffs.append(max([abs(res["score"] - res2["score"])] + [abs(first[n] - dets[n].last_score) for n in names]))
+            except Exception:
+                pass
+        meta["determinism_max_abs_diff"] = max(diffs) if diffs else None
     meta["n_images"], meta["wall_seconds"] = len(rows), round(time.time() - t_start, 1)
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, default=str))
     print(f"resultados em {out_dir}")
