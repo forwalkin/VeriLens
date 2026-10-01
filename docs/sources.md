@@ -11,8 +11,8 @@
   imagem sofreu JPEG nem reamostragem (degradações devem ser adicionadas por nós, de forma controlada).
 - Licença: **CC BY-NC-SA 4.0** (uso não comercial, atribuição, mesma licença em derivados). O dataset local e
   suas versões editadas ficam fora do git (`.gitignore`); não redistribuir.
-- Observação: a página do registro lista o DOI `10.5281/zenodo.10066047` apenas como "related work" (supplement),
-  não como o registro do dataset.
+- Observação: a página do registro cita outro DOI apenas como "related work" (supplement); ele não é o registro
+  do dataset. Use sempre o DOI acima.
 - **Estrutura interna do ZIP (pastas, nomes, relação com prompts.csv): AINDA NÃO VERIFICADA.** Use
   `scripts/inspect_synthbuster.py` e preencha a seção abaixo com o resultado.
 
