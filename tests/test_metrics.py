@@ -48,3 +48,11 @@ def test_separable_beats_chance_and_inverted_flagged():
     assert chance_verdict(auc(y, s), bootstrap_auc_ci(y, s, n_boot=300)) == "melhor que o acaso"
     s_inv = 1 - s
     assert chance_verdict(auc(y, s_inv), bootstrap_auc_ci(y, s_inv, n_boot=300)).startswith("INVERTIDO")
+
+
+def test_wilson_ci_bounds():
+    from evalkit.metrics import wilson_ci
+    lo, hi = wilson_ci(50, 100)
+    assert 0.40 < lo < 0.41 and 0.59 < hi < 0.60
+    assert wilson_ci(0, 10)[0] == 0.0 and wilson_ci(10, 10)[1] == 1.0
+    assert np.isnan(wilson_ci(0, 0)[0])

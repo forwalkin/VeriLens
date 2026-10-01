@@ -97,3 +97,14 @@ def chance_verdict(auc_value: float, ci: tuple[float, float]) -> str:
     if lo <= 0.5 <= hi:
         return "indistinguível do acaso"
     return "melhor que o acaso" if lo > 0.5 else "INVERTIDO (pior que o acaso)"
+
+
+def wilson_ci(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """IC de Wilson para uma proporção (taxa de detecção / falso positivo por grupo)."""
+    if n == 0:
+        return float("nan"), float("nan")
+    p = k / n
+    d = 1 + z**2 / n
+    c = (p + z**2 / (2 * n)) / d
+    h = z * np.sqrt(p * (1 - p) / n + z**2 / (4 * n**2)) / d
+    return float(max(0.0, c - h)), float(min(1.0, c + h))

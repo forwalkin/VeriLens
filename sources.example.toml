@@ -1,0 +1,63 @@
+# Fontes do dataset. Copie para sources.toml e ajuste. Rode:
+#   python scripts/build_dataset.py --sources sources.toml
+#
+# kinds:
+#   local_dir  : pasta local (path)
+#   url_zip    : zip baixado por HTTP (url); amostra n arquivos de imagem
+#   hf_dataset : dataset do Hugging Face em streaming (repo, split, image_column)
+# generator_from = "parent_dir" usa o nome da subpasta como gerador (e amostra n POR subpasta).
+# Os arquivos são copiados com os bytes ORIGINAIS (sem reencodar).
+#
+# ATENÇÃO: IDs, estrutura de pastas e licenças abaixo NÃO foram verificados por mim
+# (sem acesso a esses hosts no ambiente em que escrevi isto). Confira antes de rodar.
+
+# ---------- REAL ----------
+[[source]]
+name = "my_photos"            # melhor fonte: fotos suas, de câmeras/celulares variados
+label = "real"
+kind = "local_dir"
+path = "~/eval/real_photos"
+n = 150
+generator = "camera:personal"
+license = "own"
+
+[[source]]
+name = "coco_val2017"         # fotos reais (Flickr), já em JPEG, ~640x480
+label = "real"
+kind = "url_zip"
+url = "http://images.cocodataset.org/zips/val2017.zip"
+n = 150
+generator = "camera:flickr-coco"
+license = "CC BY 2.0 (por imagem)"
+
+# RAISE-1k (TIFF/RAW, sem compressão) é o par real recomendado do Synthbuster:
+# baixe em http://loki.disi.unitn.it/RAISE/download.html e aponte local_dir.
+# [[source]]
+# name = "raise1k"
+# label = "real"
+# kind = "local_dir"
+# path = "~/eval/raise1k_png"
+# n = 150
+# generator = "camera:raise-1k"
+
+# ---------- IA (vários geradores) ----------
+# Synthbuster (Zenodo, DOI 10.5281/zenodo.10066047): 1000 imagens por gerador
+# (DALL·E 2/3, Firefly, Midjourney v5, SD 1.3/1.4/2/XL, GLIDE). Baixe/descompacte
+# e use parent_dir como gerador. Verifique a licença na página do Zenodo.
+[[source]]
+name = "synthbuster"
+label = "ai"
+kind = "local_dir"
+path = "~/eval/synthbuster"
+generator_from = "parent_dir"
+n = 40                        # POR gerador
+license = "verificar no Zenodo"
+
+# Complemento "in the wild": imagens de IA que você mesmo coletou (redes sociais etc.).
+# [[source]]
+# name = "wild_ai"
+# label = "ai"
+# kind = "local_dir"
+# path = "~/eval/wild_ai"
+# n = 100
+# generator = "unknown-wild"
