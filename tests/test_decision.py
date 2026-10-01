@@ -8,7 +8,7 @@ def R(a, lo, hi, n=100):
 def ev(**kw):
     base = dict(detector="d", global_=R(0.9, 0.85, 0.94),
                 generators={"sd": R(0.92, 0.86, 0.96), "mj": R(0.88, 0.8, 0.93)},
-                robustness={"compressao": R(0.8, 0.7, 0.88)}, strata={"fmt:PNG": R(0.88, 0.8, 0.93)})
+                robustness={"compressao": R(0.8, 0.7, 0.88)}, strata={"formato:PNG": R(0.88, 0.8, 0.93)})
     base.update(kw)
     return Evidence(**base)
 
@@ -42,7 +42,7 @@ def test_robustness_failure_blocks_keep():
 
 
 def test_stratum_drop_flags_confounder():
-    d = decide(ev(strata={"fmt:JPEG": R(0.6, 0.5, 0.7)}))
+    d = decide(ev(strata={"formato:JPEG": R(0.6, 0.5, 0.7)}))
     assert d.label == RECALIBRAR and any("confundidor" in g for g in d.gaps)
 
 
@@ -54,3 +54,14 @@ def test_dataset_confounder_without_strata_is_a_gap():
 def test_insufficient_data():
     assert decide(ev(global_=AucResult(0.9, 0.7, 1.0, 10, 10))).label == INSUFICIENTE
     assert decide(ev(generators={})).label == INSUFICIENTE
+
+
+def test_confounder_needs_matching_stratum():
+    only_res = {"resolução:tercil1": R(0.9, 0.85, 0.94)}
+    d = decide(ev(strata=only_res, dataset_confounders=["is_jpeg"]))
+    assert d.label == RECALIBRAR and any("is_jpeg" in g for g in d.gaps)
+    ok = decide(ev(strata={"formato:PNG": R(0.9, 0.85, 0.94), "formato:JPEG": R(0.88, 0.8, 0.93)},
+                   dataset_confounders=["is_jpeg"]))
+    assert ok.label == MANTER
+    # has_exif / bytes_per_pixel nunca são controláveis por estrato
+    assert decide(ev(dataset_confounders=["has_exif"])).label == RECALIBRAR

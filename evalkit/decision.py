@@ -14,6 +14,10 @@ MIN_N = 30            # amostra mínima por classe para um AUC por gerador/estra
 MIN_N_EDIT = 20       # idem para AUC por edição (amostras menores; ICs largos)
 STRATUM_DROP = 0.15   # queda de AUC num estrato (formato/resolução) vs. global => suspeita de confundidor
 
+# Qual estrato controla cada atributo-confundidor (None = não há estrato que o controle).
+STRATUM_FOR = {"is_jpeg": "formato:", "log_megapixels": "resolução:",
+               "has_exif": None, "bytes_per_pixel": None, "aspect_ratio": None}
+
 MANTER = "manter para investigação"
 RECALIBRAR = "recalibrar"
 DESCARTAR = "descartar"
@@ -86,8 +90,10 @@ def decide(ev: Evidence) -> Decision:
     for name, r in sorted(judged.items()):
         if r.status() in ("acaso", "invertido") or g.auc - r.auc > STRATUM_DROP:
             gaps.append(f"possível confundidor ({name}): AUC {r.auc:.2f} [{r.lo:.2f}, {r.hi:.2f}] vs global {g.auc:.2f}")
-    if ev.dataset_confounders and not judged:
-        gaps.append("confundidores no dataset (" + ", ".join(ev.dataset_confounders) + ") e nenhum estrato avaliável para descartá-los")
+    uncontrolled = [a for a in ev.dataset_confounders
+                    if STRATUM_FOR.get(a) is None or not any(k.startswith(STRATUM_FOR[a]) for k in judged)]
+    if uncontrolled:
+        gaps.append("confundidores no dataset sem estrato avaliável para descartá-los: " + ", ".join(uncontrolled))
     if not ev.robustness:
         notes.append("robustez em imagens editadas não avaliada (sem IA editada no dataset)")
 

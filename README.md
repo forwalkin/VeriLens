@@ -8,18 +8,23 @@ em outra etapa, com resultados em pastas separadas (ver `docs/decisions/0001`).
 ## Pergunta que o benchmark responde
 
 Frequency, CLIP e SDXL Detector distinguem real de IA melhor que o acaso?
-Resposta por detector via **AUC com IC 95%** (independe de limiar). Se o IC contém 0.5,
-o detector é "indistinguível do acaso". Também reportamos o que o projeto original reportaria
-(limiar 0.5): accuracy, precision, recall, F1, matriz de confusão.
+Resposta por detector via **AUC com IC 95%** (independe de limiar), no global **e por gerador**, com n
+por gerador. Também reportamos o que o projeto original reportaria (limiar 0.5): accuracy, precision,
+recall, F1, matriz de confusão. O relatório termina em "Decisão de port para Android" (preliminar).
+
+**Critério interno (não é limite científico universal):** limite inferior do IC95% do AUC > 0,60 — global,
+em cada gerador com n ≥ 30, nos grupos de edição, e sem sinal de confundidor. Um AUC global alto não basta
+se algum gerador relevante estiver próximo do acaso. Frequency e CLIP **não são descartados** só pelo global:
+a regra separa "manter para investigação / recalibrar / descartar" com as evidências listadas (ADR 0002).
 
 ## Uso
 
 ```bash
 pip install -r requirements.txt
-scripts/setup_base.sh                      # clona o base no commit fixado e instala (torch etc.)
+bash scripts/setup_base.sh                 # clona o base no commit fixado e instala (torch etc.)
 cp sources.example.toml sources.toml       # ajuste caminhos/fontes (veja avisos no arquivo)
 python scripts/build_dataset.py --sources sources.toml
-python scripts/make_edited.py --per-edit 20
+python scripts/make_edited.py --per-edit 30   # real editada + IA editada (robustez)
 python scripts/audit_dataset.py            # confundidores: formato, resolução, EXIF
 python scripts/run_benchmark.py            # exige base limpa no commit fixado
 python scripts/report.py results/<run_id>  # report.md + score_distributions.png
@@ -31,17 +36,23 @@ pytest -q                                  # testes de métricas, edições e do
 `dataset/real`, `dataset/ai`, `dataset/edited` + `dataset/manifest.csv` (id = sha256[:16],
 rótulo, fonte, gerador, licença, pai e edição das editadas). Bytes originais preservados.
 
-Tamanho mínimo sugerido: ≥300 reais, ≥300 IA (≥30 por gerador), 17 edições × 20 = 340 editadas.
-Com ~300 por classe o IC do AUC fica por volta de ±0,03; por gerador (n≈40) a taxa tem IC de ±0,15 —
-diferenças pequenas entre geradores não são conclusivas.
+Tamanho sugerido: ≥100 pares Synthbuster↔RAISE (mesmas chaves em todos os geradores; ≥30 por gerador é o
+mínimo para julgar), mais fotos reais próprias; edições: 17 × 30 por classe. Por gerador (n≈100) o IC do
+AUC fica em torno de ±0,05; com n=30, ±0,10 — diferenças pequenas entre geradores não são conclusivas.
+Por edição individual (n=30 por classe) os ICs são largos: use os grupos (compressão, geometria, tonal).
 
 Fontes sugeridas (conferir licença e estrutura antes de usar):
 - **IA:** Synthbuster (Zenodo, 10.5281/zenodo.10066047): DALL·E 2/3, Firefly, Midjourney v5, SD 1.3/1.4/2/XL, GLIDE.
 - **Real:** RAISE-1k (par recomendado do Synthbuster), COCO val2017 e, principalmente, **fotos suas**
   de câmeras/celulares variados.
-- **Edited:** geradas de `real` por `make_edited.py` (17 edições determinísticas: JPEG q75/50/30, resize,
-  crop, cor, filtros, pipeline "social", `screenshot_sim`). `screenshot_sim` é simulação: adicione também
-  capturas/fotos de tela reais como `edited` manualmente.
+- **Pareamento:** `[pairing]` em `sources.toml` escolhe UM conjunto de chaves (nome de arquivo sem extensão,
+  ou `map_csv` com `ai_key,real_key`) presente no real e em todos os geradores. O Synthbuster foi gerado a partir
+  de *descrições* do RAISE: o par compartilha tema, não é a mesma imagem. A nomenclatura real dos arquivos
+  não foi verificada por mim. RAISE são imagens de dezenas de MP: espere centenas de MB por TIFF.
+- **Edited / ai_edited:** `make_edited.py` aplica 17 edições determinísticas a reais (`edited`) e a IA
+  (`ai_edited`, pais em rodízio entre geradores). Só com real editada mediríamos falsos positivos; a IA editada
+  mede se o sinal sobrevive a compressão/edição. `screenshot_sim` é simulação: adicione também capturas/fotos
+  de tela reais manualmente.
 
 **Vieses:** real e IA costumam diferir em formato (JPEG vs PNG), resolução e EXIF. Rode
 `audit_dataset.py` primeiro: atributos com AUC ≥0,8 ou ≤0,2 são confundidores e devem constar
@@ -50,9 +61,9 @@ na interpretação. Possível sobreposição entre o treino do `Organika/sdxl-de
 
 ## Convenções
 
-- Positivo = IA. REAL e EDITADA (real editada) = negativos. IA parcialmente editada está fora do escopo.
-- Comparação principal: REAL vs IA (independentes). EDITADA é reportada à parte (taxa de falso positivo
-  por edição), porque pais repetidos inflariam a confiança do IC.
+- Positivo = IA (`ai`, `ai_edited`). Negativo = `real`, `edited`. IA parcialmente editada está fora do escopo.
+- Comparação principal: REAL vs IA. Robustez: real editada vs IA editada com a mesma edição; os grupos de
+  edição usam bootstrap por imagem-pai (pais repetem entre edições).
 - Limiar 0.5 e pesos 0.30/0.35/0.35 são os do projeto original e não são ajustados aqui.
 - Cada execução grava `meta.json` (commit, hash do manifesto, hash da calibração, versões, CPU).
 
@@ -60,3 +71,10 @@ na interpretação. Possível sobreposição entre o treino do `Organika/sdxl-de
 
 Projeto-base: MIT. `Organika/sdxl-detector`: CC BY-NC 3.0 (uso não comercial, com atribuição).
 Respeite as licenças de cada fonte de imagens.
+
+## Estado do repositório / permissões
+
+`scripts/setup_base.sh` está versionado como `100755` (um teste em `tests/test_repo_hygiene.py` falha se isso
+mudar). Se um zip/sistema de arquivos descartar o bit de execução, o git mostrará `old mode 100755 / new mode 100644`:
+restaure com `git checkout -- scripts/setup_base.sh` (ou `git update-index --chmod=+x scripts/setup_base.sh`)
+ou apenas rode `bash scripts/setup_base.sh`, que não exige o bit. Prefira o `.bundle` ao zip: ele preserva o histórico e os modos.
