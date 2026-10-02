@@ -26,7 +26,7 @@ def _tracked_text_files():
 
 
 def test_old_synthbuster_doi_is_gone_from_tracked_files():
-    old = "10.5281/zenodo." + "10066047"  # montado por concatenação para o teste não se auto-detectar
+    old = "10.5281/zenodo." + "1006" + "6047"  # em pedaços: o teste não se auto-detecta
     assert [rel for rel, txt in _tracked_text_files() if old in txt] == []
 
 
