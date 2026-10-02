@@ -6,7 +6,8 @@
 - Conteúdo (conforme descrição do registro): 9 geradores — DALL·E 2, DALL·E 3, Adobe Firefly, Midjourney v5,
   Stable Diffusion 1.3, 1.4, 2, XL e GLIDE — com 1000 imagens por gerador; prompts e parâmetros em `prompts.csv`.
 - As imagens são "vagamente baseadas" nas do RAISE-1k: para cada imagem do RAISE-1k gerou-se uma descrição
-  (Midjourney /describe + CLIP interrogator), editada manualmente. O par compartilha tema, não é a mesma imagem.
+  (Midjourney /describe + CLIP interrogator), editada manualmente. Por isso usamos **pareamento por
+  conteúdo/descrição**: o par compartilha tema, não é a mesma fotografia nem é pixel-pareado.
 - Os autores recomendam comparar as imagens sintéticas com as correspondentes do RAISE-1k e dizem que nenhuma
   imagem sofreu JPEG nem reamostragem (degradações devem ser adicionadas por nós, de forma controlada).
 - Licença: **CC BY-NC-SA 4.0** (uso não comercial, atribuição, mesma licença em derivados). O dataset local e

@@ -40,7 +40,10 @@ def _make_run(tmp_path):
         w.writeheader()
         w.writerows(rows)
     (run / "meta.json").write_text(json.dumps({"run_id": "t", "kind": "PARTIAL-SMOKE", "base_commit": "4ec7edc",
-                                               "base_dirty": False, "manifest_digest": "x", "env": {}, "load_seconds": {}}))
+                                               "base_dirty": False, "manifest_digest": "x", "env": {}, "load_seconds": {},
+                                               "pairing": {"requested_pairs": 300, "common_keys_available": 80, "pairs_used": 80,
+                                                           "generators": ["genA", "genB"],
+                                                           "keys_available_per_generator": {"s/genA": 80, "s/genB": 80}}}))
     return run
 
 
@@ -52,7 +55,10 @@ def test_report_flags_chance_generator_confounder_and_does_not_approve(tmp_path)
     gena = next(l for l in text.splitlines() if l.startswith("| genA |") and "ok" in l)
     assert gena
     assert "**CONFUNDIDOR**" in text                      # formato separa real (JPEG) de IA (PNG)
-    assert "## 3. Pareamento" in text and "taxa de vitória" in text
+    assert "## 3. Pareamento por conteúdo/descrição" in text and "taxa de vitória" in text
+    assert "não é a mesma fotografia" in text
+    assert "pares solicitados (máximo desejado): 300" in text and "pares usados: 80" in text
+    assert "ATENÇÃO" in text.split("## 3.")[1].split("## 4.")[0]  # usados < solicitados é informado
     assert "## 8. Decisão de port para Android" in text
     dec_line = next(l for l in text.splitlines() if l.startswith("| Frequency") and "preliminar" not in l and "**" in l)
     assert "**manter para investigação**" not in dec_line  # AUC global alto não basta

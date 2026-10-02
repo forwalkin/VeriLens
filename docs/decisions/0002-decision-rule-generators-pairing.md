@@ -18,10 +18,12 @@ confundidor + robustez; (c) decisão 100% manual sem regra prévia.
   *descartar* (global não passa e nenhum gerador julgado passa) / *dados insuficientes*.
 O relatório mostra todas as evidências e a lista de lacunas; a decisão final continua sendo nossa.
 
-**Pareamento.** `[pairing]` escolhe um conjunto único de chaves comum ao RAISE-1k e a todos os geradores do
-Synthbuster; o relatório calcula a taxa de vitória pareada (P(IA > real no mesmo par)) com IC por bootstrap
-de pares. Reduz confundimento de conteúdo, sem eliminar o de formato/resolução (Synthbuster = PNG, RAISE =
-TIFF/RAW de alta resolução). Os pares compartilham tema, não são a mesma imagem.
+**Pareamento por conteúdo/descrição.** `[pairing]` escolhe um conjunto único de chaves comum ao RAISE-1k e a todos os
+geradores do Synthbuster; o relatório calcula a taxa de vitória pareada (P(score IA > score real com a mesma chave))
+com IC por bootstrap de pares. O Synthbuster foi gerado a partir de *descrições* das imagens do RAISE-1k: o par
+compartilha tema/descrição, **não é a mesma fotografia** nem tem correspondência pixel a pixel. Reduz parcialmente o
+confundimento de conteúdo, sem eliminar o de formato/resolução. Meta: ≥ 9 × 30 = 270 pares para julgar cada gerador;
+alvo inicial 300, tratado como máximo desejado (o relatório informa solicitado × disponível × usado).
 
 **IA editada (adição de escopo, justificada).** Com apenas real editada só medimos falso positivo; o pedido de
 avaliar "comportamento após compressão/edição" exige também o efeito sobre IA. Gerada por `make_edited.py`

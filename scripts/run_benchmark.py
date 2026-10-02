@@ -128,6 +128,9 @@ def main(argv: list[str] | None = None) -> pathlib.Path:
             "detectors": names, **base_info(args.allow_dirty), "env": env_info(),
             "manifest_digest": manifest_digest(args.dataset / "manifest.csv")}
 
+    psum = args.dataset / "pairing_summary.json"
+    if psum.exists():
+        meta["pairing"] = json.loads(psum.read_text())
     rows = read_manifest(args.dataset / "manifest.csv")
     if args.sample_per_group:
         rows = stratified_sample(rows, args.sample_per_group)

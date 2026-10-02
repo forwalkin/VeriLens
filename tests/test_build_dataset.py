@@ -90,3 +90,25 @@ def test_make_edited_creates_real_and_ai_edited(tmp_path):
     # idempotente: rodar de novo não duplica
     make_edited.main(["--dataset", str(tmp_path / "ds"), "--per-edit", "4"])
     assert len(read_manifest(tmp_path / "ds" / "manifest.csv")) == len(rows)
+
+
+def test_pairing_summary_reports_requested_available_and_used(tmp_path):
+    import json
+
+    _setup(tmp_path)  # 12 reais, 10 chaves comuns; n_pairs = 6
+    _run(tmp_path)
+    summ = json.loads((tmp_path / "ds" / "pairing_summary.json").read_text())
+    assert (summ["requested_pairs"], summ["common_keys_available"], summ["pairs_used"]) == (6, 10, 6)
+    assert summ["generators"] == ["dalle3", "sd14"] and "descrição" in summ["kind"]
+
+
+def test_pairing_requests_more_than_available_uses_max_and_says_so(tmp_path):
+    import json
+
+    _setup(tmp_path)
+    cfg = (tmp_path / "sources.toml").read_text().replace("n_pairs = 6", "n_pairs = 300")
+    (tmp_path / "sources.toml").write_text(cfg)
+    rows = _run(tmp_path)
+    summ = json.loads((tmp_path / "ds" / "pairing_summary.json").read_text())
+    assert (summ["requested_pairs"], summ["pairs_used"]) == (300, 10)  # máximo disponível, não obrigação
+    assert len([r for r in rows if r.label == "real"]) == 10
