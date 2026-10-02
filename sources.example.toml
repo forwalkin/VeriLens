@@ -3,7 +3,8 @@
 #
 # kinds:
 #   local_dir  : pasta local (path)
-#   url_zip    : zip baixado por HTTP (url); amostra n arquivos de imagem
+#   url_zip    : zip baixado por HTTP (url) por inteiro; amostra n arquivos de imagem
+#   remote_zip : zip lido por HTTP Range; baixa só o índice + os arquivos selecionados (use p/ ZIPs grandes)
 #   hf_dataset : dataset do Hugging Face em streaming (repo, split, image_column)
 # generator_from = "parent_dir" usa o nome da subpasta como gerador (e amostra n POR subpasta).
 # Os arquivos são copiados com os bytes ORIGINAIS (sem reencodar).
@@ -32,7 +33,7 @@ license = "CC BY 2.0 (por imagem)"
 
 # RAISE-1k (TIFF/RAW, sem compressão) é o par real recomendado do Synthbuster:
 # baixe em http://loki.disi.unitn.it/RAISE/download.html e aponte local_dir.
-# Atenção: são imagens de dezenas de MP (centenas de MB cada em TIFF).
+# RAISE-1k são fotos em resolução de câmera; confira formato e tamanho na página do download antes de baixar.
 [[source]]
 name = "raise1k"
 label = "real"
@@ -43,27 +44,31 @@ generator = "camera:raise-1k"
 license = "ver termos do RAISE"
 
 # ---------- IA (vários geradores) ----------
-# Synthbuster (Zenodo, DOI 10.5281/zenodo.10066047): 1000 imagens por gerador
-# (DALL·E 2/3, Firefly, Midjourney v5, SD 1.3/1.4/2/XL, GLIDE). Baixe/descompacte
-# e use parent_dir como gerador. Verifique a licença na página do Zenodo.
+# Synthbuster — https://zenodo.org/records/10066460 (DOI 10.5281/zenodo.10066460), CC BY-NC-SA 4.0.
+# 9 geradores x 1000 imagens, ~12,4 GB no ZIP (md5 0695bd328e16ea21c5c9cc2ae1d994ff), prompts em prompts.csv.
+# NÃO baixe o ZIP inteiro: rode primeiro `python scripts/inspect_synthbuster.py` (lê só o índice por Range)
+# e confira pastas/nomes. Com kind="remote_zip" só os arquivos escolhidos são transferidos.
+# generator_from="parent_dir" assume <pasta-do-gerador>/<arquivo>: CONFIRME com a inspeção.
 [[source]]
 name = "synthbuster"
 label = "ai"
-kind = "local_dir"
-path = "~/eval/synthbuster"
+kind = "remote_zip"
+url = "https://zenodo.org/records/10066460/files/synthbuster.zip?download=1"
 generator_from = "parent_dir"
 n = 40                        # POR gerador; ignorado quando a fonte participa de [pairing]
-license = "verificar no Zenodo"
+license = "CC BY-NC-SA 4.0 (Synthbuster, Zenodo 10066460)"
 
-# Pareamento Synthbuster <-> RAISE-1k. O Synthbuster foi gerado a partir de DESCRIÇÕES das imagens
-# do RAISE-1k, então o par compartilha tema/conteúdo (não é a mesma imagem). Escolhe-se UM conjunto
-# de chaves presente no real e em TODOS os geradores; os mesmos pares valem para todos eles.
-# A chave padrão é o nome do arquivo sem extensão. Se os nomes não coincidirem, passe um CSV
-# (colunas ai_key,real_key). NÃO verifiquei a nomenclatura real dos arquivos: confira.
+# Pareamento por CONTEÚDO/DESCRIÇÃO Synthbuster <-> RAISE-1k. O Synthbuster foi gerado a partir de descrições
+# das imagens do RAISE-1k: o par compartilha tema, NÃO é a mesma fotografia (não é pixel-pareado).
+# Escolhe-se UM conjunto de chaves presente no real e em TODOS os geradores; os mesmos pares valem para todos.
+# Meta: 9 geradores x 30 = 270 pares no mínimo; alvo inicial 300. n_pairs é um MÁXIMO desejado: se houver
+# menos chaves comuns, usa-se o que existir (o relatório informa solicitado x disponível x usado).
+# A chave padrão é o nome do arquivo sem extensão; se os nomes não casarem, passe map_csv (ai_key,real_key).
+# A nomenclatura real só é conhecida após scripts/inspect_synthbuster.py: confira antes de rodar.
 [pairing]
 real_source = "raise1k"
 ai_sources = ["synthbuster"]
-n_pairs = 100
+n_pairs = 300
 # map_csv = "~/eval/synthbuster_to_raise.csv"
 
 # Complemento "in the wild": imagens de IA que você mesmo coletou (redes sociais etc.).

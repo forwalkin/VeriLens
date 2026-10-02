@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import csv
 import io
+import json
 import pathlib
 import random
 import shutil
@@ -57,6 +58,15 @@ def _zip(src: dict, cache: pathlib.Path):
     return items, lambda ref: zf.read(ref)
 
 
+def _remote_zip(src: dict):
+    """ZIP remoto lido por HTTP Range: só o índice e os membros escolhidos são transferidos (sem baixar o ZIP todo)."""
+    from evalkit.remotezip import open_remote_zip  # import tardio
+
+    zf, _ = open_remote_zip(src["url"])
+    items = [(n, n) for n in zf.namelist() if pathlib.PurePosixPath(n).suffix.lower() in IMG_EXT]
+    return items, lambda ref: zf.read(ref)
+
+
 def _hf(src: dict, n: int, seed: int):
     from datasets import Image as HFImage, load_dataset  # import tardio: dependência opcional
 
@@ -80,12 +90,15 @@ def _load_pair_map(path: pathlib.Path | None) -> dict[str, str]:
         return {r["ai_key"]: r["real_key"] for r in csv.DictReader(f)}
 
 
-def _plan_pairs(cfg: dict, listed: dict, rng: random.Random) -> dict:
+def _plan_pairs(cfg: dict, listed: dict, rng: random.Random) -> tuple[dict, dict]:
     """Escolhe um conjunto único de chaves presentes no real E em todos os geradores de IA.
 
-    Retorna {nome_da_fonte: {gerador: [(rel, ref, pair_key)]}} já restrito às chaves escolhidas.
-    Observação: o Synthbuster foi gerado a partir de DESCRIÇÕES das imagens do RAISE-1k, então o
-    par compartilha conteúdo/tema, não é a mesma imagem. A estrutura de nomes NÃO foi verificada.
+    Retorna (plano, resumo). plano = {fonte: {gerador: [(rel, ref, pair_key)]}} restrito às chaves
+    escolhidas. `n_pairs` é um MÁXIMO desejado: se houver menos chaves comuns, usa-se o que existe e o
+    resumo registra solicitado x disponível x usado (o relatório repete isso).
+    Pareamento por CONTEÚDO/DESCRIÇÃO: o Synthbuster foi gerado a partir de descrições das imagens do
+    RAISE-1k; o par compartilha tema, NÃO é a mesma fotografia nem há correspondência pixel a pixel.
+    A estrutura de nomes dos arquivos é confirmada por scripts/inspect_synthbuster.py.
     """
     pc = cfg["pairing"]
     pair_map = _load_pair_map(pathlib.Path(pc["map_csv"]).expanduser() if pc.get("map_csv") else None)
@@ -105,12 +118,19 @@ def _plan_pairs(cfg: dict, listed: dict, rng: random.Random) -> dict:
                  "Forneça [pairing].map_csv com colunas ai_key,real_key.")
     n = min(pc["n_pairs"], len(keys))
     if n < pc["n_pairs"]:
-        print(f"  AVISO: só {len(keys)} chaves em comum (pedido: {pc['n_pairs']})")
+        print(f"  AVISO: só {len(keys)} chaves em comum (pedido: {pc['n_pairs']}); usando {n}")
     chosen = sorted(rng.sample(sorted(keys), n))
+    summary = {
+        "requested_pairs": pc["n_pairs"], "common_keys_available": len(keys), "pairs_used": n,
+        "real_keys_available": len(real_by_key),
+        "keys_available_per_generator": {f"{nm}/{g}": len(m) for (nm, g), m in sorted(per_gen.items())},
+        "generators": sorted(g for (_, g) in per_gen),
+        "kind": "pareamento por conteúdo/descrição (não é a mesma fotografia)",
+    }
     plan = {pc["real_source"]: {"": [(*real_by_key[k], k) for k in chosen]}}
     for (name, gen), m in per_gen.items():
         plan.setdefault(name, {})[gen] = [(*m[k], k) for k in chosen]
-    return plan
+    return plan, summary
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -138,6 +158,8 @@ def main(argv: list[str] | None = None) -> None:
             items, read = _local(src)
         elif kind == "url_zip":
             items, read = _zip(src, pathlib.Path("cache"))
+        elif kind == "remote_zip":
+            items, read = _remote_zip(src)
         elif kind == "hf_dataset":
             items, read = _hf(src, src["n"], args.seed)
         else:
@@ -152,8 +174,11 @@ def main(argv: list[str] | None = None) -> None:
         for nm in [pc["real_source"], *pc["ai_sources"]]:
             if srcs[nm]["kind"] == "hf_dataset":
                 sys.exit("pareamento não suporta kind=hf_dataset")
-        plan.update(_plan_pairs(cfg, listed, rng))
+        pair_plan, pair_summary = _plan_pairs(cfg, listed, rng)
+        plan.update(pair_plan)
         paired = set(plan)
+        (args.out).mkdir(parents=True, exist_ok=True)
+        (args.out / "pairing_summary.json").write_text(json.dumps(pair_summary, indent=2, ensure_ascii=False))
     for name, src in srcs.items():
         if name in paired:
             continue

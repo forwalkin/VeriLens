@@ -63,6 +63,21 @@ def write_manifest(path: pathlib.Path, rows: list[Row]) -> None:
             w.writerow(asdict(r))
 
 
+def stratified_sample(rows: list[Row], n_per_group: int, seed: int = 0) -> list[Row]:
+    """Até n_per_group imagens por (label, gerador|edição): subconjunto pequeno e reprodutível p/ validação."""
+    import random
+
+    groups: dict[tuple[str, str], list[Row]] = {}
+    for r in sorted(rows, key=lambda r: r.id):
+        groups.setdefault((r.label, r.edit if r.label.endswith("edited") else r.generator), []).append(r)
+    rng = random.Random(seed)
+    out: list[Row] = []
+    for key in sorted(groups):
+        g = groups[key]
+        out += g if len(g) <= n_per_group else rng.sample(g, n_per_group)
+    return out
+
+
 def manifest_digest(path: pathlib.Path) -> str:
     return sha256_file(path)[:12]
 

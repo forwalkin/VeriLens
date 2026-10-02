@@ -66,13 +66,26 @@ def section_generators(rows, dets, n_boot) -> list[str]:
     return out
 
 
-def section_paired(rows, dets, n_boot) -> list[str]:
+def section_paired(rows, dets, n_boot, meta) -> list[str]:
+    title = "## 3. Pareamento por conteúdo/descrição (Synthbuster ↔ RAISE-1k)"
     if not any(r["pair_key"] for r in rows):
-        return ["## 3. Pareamento Synthbuster ↔ RAISE-1k", "", "Sem `pair_key` no dataset: análise pareada não executada.", ""]
-    out = ["## 3. Pareamento Synthbuster ↔ RAISE-1k", "",
-           "Taxa de vitória = P(score da IA > score da real do mesmo par). 0,5 = o detector não ordena o par; "
-           "controla o conteúdo da cena. O Synthbuster foi gerado a partir de *descrições* do RAISE, então o par "
-           "compartilha tema, não é a mesma imagem.", ""]
+        return [title, "", "Sem `pair_key` no dataset: análise pareada não executada.", ""]
+    out = [title, "",
+           "Pareamento por **conteúdo/descrição**: o Synthbuster foi gerado a partir de *descrições* das imagens do "
+           "RAISE-1k, então o par compartilha tema, mas **não é a mesma fotografia** nem há correspondência pixel a pixel. "
+           "Taxa de vitória = P(score da IA > score da real com a mesma chave). 0,5 = o detector não ordena o par. "
+           "Isso reduz, sem eliminar, o confundimento de conteúdo.", ""]
+    ps = meta.get("pairing")
+    if ps:
+        out += [f"- pares solicitados (máximo desejado): {ps['requested_pairs']}; chaves comuns realmente disponíveis: "
+                f"{ps['common_keys_available']}; **pares usados: {ps['pairs_used']}**"]
+        if ps["pairs_used"] < ps["requested_pairs"]:
+            out += [f"- **ATENÇÃO:** o máximo disponível ({ps['pairs_used']}) ficou abaixo do solicitado; "
+                    "os ICs por gerador refletem esse n menor."]
+        n_gen = len(ps["generators"])
+        if ps["pairs_used"] < MIN_N:
+            out += [f"- **ATENÇÃO:** menos de {MIN_N} pares por gerador: nenhum gerador pode ser julgado individualmente."]
+        out += [f"- geradores no pareamento: {n_gen}; chaves disponíveis por gerador: `{json.dumps(ps['keys_available_per_generator'])}`", ""]
     for d in dets:
         res = an.paired(rows, d, n_boot)
         out += [f"### {NAMES[d]}", "", "| gerador | n pares | taxa de vitória [IC95%] |", "|---|---|---|"]
@@ -227,7 +240,7 @@ def main(argv: list[str] | None = None) -> pathlib.Path:
            "> Estimativa estatística, não prova. Positivo = IA. Seção 8 resume a decisão preliminar de port.", ""]
     md += section_global(rows, dets, args.n_boot)
     md += section_generators(rows, dets, args.n_boot)
-    md += section_paired(rows, dets, args.n_boot)
+    md += section_paired(rows, dets, args.n_boot, meta)
     md += section_confounders(rows, dets, args.n_boot)
     md += section_robustness(rows, dets, args.n_boot)
     md += threshold_tables(rows, dets)
