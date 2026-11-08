@@ -130,3 +130,79 @@ n = 2
     rows = read_manifest(tmp_path / "ds" / "manifest.csv")
     assert len(rows) == 6 and {r.generator for r in rows} == {"genA", "genB", "genC"}
     assert all((tmp_path / "ds" / r.path).exists() for r in rows)
+
+
+def _serve(handler_cls):
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_port}/x.zip"
+
+
+def _bad_server(mode):
+    """1ª requisição Range (sondagem) é válida; as seguintes se comportam mal conforme `mode`."""
+    data = _zip_bytes()
+
+    class Bad(http.server.BaseHTTPRequestHandler):
+        calls = 0
+        full_body_sent = 0
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            type(self).calls += 1
+            a, b = self.headers["Range"].split("=")[1].split("-")
+            a, b = int(a), min(int(b), len(data) - 1)
+            if type(self).calls == 1 or mode == "ok":
+                chunk, status, cr = data[a: b + 1], 206, f"bytes {a}-{b}/{len(data)}"
+            elif mode == "later_200":
+                chunk, status, cr = data, 200, None
+                type(self).full_body_sent = len(data)
+            elif mode == "wrong_range":
+                chunk, status, cr = data[0:10], 206, f"bytes 0-9/{len(data)}"
+            elif mode == "short_body":
+                chunk, status, cr = data[a: b + 1][:-5], 206, f"bytes {a}-{b}/{len(data)}"
+            self.send_response(status)
+            if cr:
+                self.send_header("Content-Range", cr)
+            self.send_header("Content-Length", str(len(chunk)))
+            self.end_headers()
+            try:
+                self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    return Bad, *_serve(Bad), len(data)
+
+
+@pytest.mark.parametrize("mode", ["later_200", "wrong_range", "short_body"])
+def test_bad_range_responses_after_probe_are_rejected(mode):
+    Bad, srv, url, total = _bad_server(mode)
+    try:
+        with pytest.raises(RuntimeError):
+            zf, f = open_remote_zip(url)
+            zf.namelist()
+    finally:
+        srv.shutdown()
+
+
+def test_later_200_is_not_read_into_memory():
+    Bad, srv, url, total = _bad_server("later_200")
+    try:
+        from evalkit.remotezip import HttpRangeFile
+
+        f = HttpRangeFile(url)
+        f.seek(0)
+        with pytest.raises(RuntimeError, match="Range"):
+            f.read(100)
+        assert f.bytes_fetched <= 2  # só a sondagem; o corpo de 200 não foi lido
+    finally:
+        srv.shutdown()
+
+
+def test_probe_is_counted_in_transfer_stats(server):
+    url, total = server
+    from evalkit.remotezip import HttpRangeFile
+
+    f = HttpRangeFile(url)
+    assert f.requests == 1 and f.bytes_fetched == 1

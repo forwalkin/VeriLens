@@ -9,3 +9,6 @@ cache/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Saídas brutas da inspeção do Synthbuster (contêm trechos do prompts.csv); versionar só o resumo em docs/sources.md
+dataset/inspection/

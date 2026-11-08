@@ -7,8 +7,23 @@ depois, só os bytes dos membros pedidos. Requer que o servidor suporte `Accept-
 from __future__ import annotations
 
 import io
+import re
 import urllib.request
 import zipfile
+
+
+_CONTENT_RANGE = re.compile(r"bytes (\d+)-(\d+)/(\d+)")
+
+
+def _parse_content_range(r) -> tuple[int, int, int]:
+    """Valida a resposta ANTES de ler o corpo: só aceita 206 com Content-Range bem formado."""
+    if r.status != 206:
+        raise RuntimeError(f"servidor não suporta Range (HTTP {r.status}); não é seguro seguir sem baixar tudo")
+    m = _CONTENT_RANGE.fullmatch(r.headers.get("Content-Range", "").strip())
+    if not m:
+        raise RuntimeError("Content-Range ausente ou inválido na resposta Range")
+    a, b, total = (int(x) for x in m.groups())
+    return a, b, total
 
 
 class HttpRangeFile(io.RawIOBase):
@@ -18,9 +33,10 @@ class HttpRangeFile(io.RawIOBase):
         self.requests = 0
         req = urllib.request.Request(url, headers={"Range": "bytes=0-0"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            if r.status != 206:
-                raise RuntimeError(f"servidor não suporta Range (HTTP {r.status}); não é seguro seguir sem baixar tudo")
-            self.size = int(r.headers["Content-Range"].rsplit("/", 1)[1])
+            _, _, self.size = _parse_content_range(r)
+            probe = r.read(2)  # pedimos 1 byte; lê no máximo 2 para nunca consumir um corpo inesperado
+        self.requests += 1
+        self.bytes_fetched += len(probe)
         self._cache: tuple[int, bytes] = (0, b"")
 
     def seekable(self) -> bool:
@@ -38,8 +54,16 @@ class HttpRangeFile(io.RawIOBase):
 
     def _fetch(self, start: int, end: int) -> bytes:
         req = urllib.request.Request(self.url, headers={"Range": f"bytes={start}-{end}"})
+        want = end - start + 1
         with urllib.request.urlopen(req, timeout=self.timeout) as r:
-            data = r.read()
+            a, b, total = _parse_content_range(r)  # recusa 200 e Content-Range inesperado antes de ler o corpo
+            if (a, b) != (start, end) or total != self.size:
+                raise RuntimeError(
+                    f"Content-Range inesperado: pedido {start}-{end}/{self.size}, recebido {a}-{b}/{total}"
+                )
+            data = r.read(want + 1)  # limite duro: nunca lê mais que o pedido
+        if len(data) != want:
+            raise RuntimeError(f"corpo com {len(data)} bytes; esperado {want} para o intervalo {start}-{end}")
         self.requests += 1
         self.bytes_fetched += len(data)
         return data
