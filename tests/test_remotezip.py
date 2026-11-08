@@ -206,3 +206,85 @@ def test_probe_is_counted_in_transfer_stats(server):
 
     f = HttpRangeFile(url)
     assert f.requests == 1 and f.bytes_fetched == 1
+
+
+# --- sondagem estrita e limite de leitura (revisão do PR #1) -----------------------------------
+
+
+class _FakeResp:
+    """Resposta HTTP falsa que registra os tamanhos pedidos a read()."""
+
+    def __init__(self, status=206, headers=None, body=b""):
+        self.status, self.headers, self._body = status, dict(headers or {}), body
+        self.read_sizes = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self, n=-1):
+        self.read_sizes.append(n)
+        out = self._body if n < 0 else self._body[:n]
+        self._body = self._body[len(out):]
+        return out
+
+
+def _fake_urlopen(monkeypatch, *responses):
+    queue = list(responses)
+    monkeypatch.setattr("evalkit.remotezip.urllib.request.urlopen", lambda *a, **k: queue.pop(0))
+
+
+def _good_probe(total=100):
+    return _FakeResp(headers={"Content-Range": f"bytes 0-0/{total}", "Content-Length": "1"}, body=b"P")
+
+
+@pytest.mark.parametrize(
+    "headers, body, msg",
+    [
+        ({"Content-Range": "bytes 5-5/100", "Content-Length": "1"}, b"x", "sondagem"),      # intervalo incorreto
+        ({"Content-Range": "bytes 0-9/100", "Content-Length": "10"}, b"x" * 10, "sondagem"),  # intervalo maior
+        ({"Content-Range": "bytes 0-0/0", "Content-Length": "1"}, b"x", "inválido"),         # tamanho total inválido
+        ({"Content-Range": "bytes 0-0/100"}, b"", "sem corpo"),                               # corpo vazio, sem Content-Length
+        ({"Content-Range": "bytes 0-0/100", "Content-Length": "0"}, b"", "Content-Length"),  # Content-Length incoerente
+        ({"Content-Range": "bytes 0-0/100", "Content-Length": "2"}, b"xx", "Content-Length"),
+    ],
+)
+def test_probe_must_be_exactly_byte_zero(monkeypatch, headers, body, msg):
+    from evalkit.remotezip import HttpRangeFile
+
+    _fake_urlopen(monkeypatch, _FakeResp(headers=headers, body=body))
+    with pytest.raises(RuntimeError, match=msg):
+        HttpRangeFile("http://x/y.zip")
+
+
+def test_probe_reads_at_most_one_byte(monkeypatch):
+    from evalkit.remotezip import HttpRangeFile
+
+    probe = _good_probe()
+    _fake_urlopen(monkeypatch, probe)
+    f = HttpRangeFile("http://x/y.zip")
+    assert probe.read_sizes == [1] and f.size == 100 and f.requests == 1 and f.bytes_fetched == 1
+
+
+def test_fetch_reads_at_most_the_requested_bytes(monkeypatch):
+    from evalkit.remotezip import HttpRangeFile
+
+    # corpo maior que o pedido, sem Content-Length: o cliente só pode pedir `want` bytes
+    body = _FakeResp(headers={"Content-Range": "bytes 10-19/100"}, body=b"A" * 10 + b"EXTRA")
+    _fake_urlopen(monkeypatch, _good_probe(), body)
+    f = HttpRangeFile("http://x/y.zip")
+    assert f._fetch(10, 19) == b"A" * 10
+    assert body.read_sizes == [10]
+
+
+def test_fetch_rejects_wrong_content_length_before_reading_body(monkeypatch):
+    from evalkit.remotezip import HttpRangeFile
+
+    body = _FakeResp(headers={"Content-Range": "bytes 10-19/100", "Content-Length": "11"}, body=b"A" * 11)
+    _fake_urlopen(monkeypatch, _good_probe(), body)
+    f = HttpRangeFile("http://x/y.zip")
+    with pytest.raises(RuntimeError, match="Content-Length"):
+        f._fetch(10, 19)
+    assert body.read_sizes == []  # o corpo nem foi lido

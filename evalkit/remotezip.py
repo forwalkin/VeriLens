@@ -23,7 +23,18 @@ def _parse_content_range(r) -> tuple[int, int, int]:
     if not m:
         raise RuntimeError("Content-Range ausente ou inválido na resposta Range")
     a, b, total = (int(x) for x in m.groups())
+    if not (0 <= a <= b < total):  # também garante total > 0
+        raise RuntimeError(f"Content-Range inválido: bytes {a}-{b}/{total}")
     return a, b, total
+
+
+def _check_content_length(r, expected: int) -> None:
+    """Se o servidor informou Content-Length, ele deve bater com o tamanho esperado (antes de ler o corpo)."""
+    cl = r.headers.get("Content-Length")
+    if cl is None:
+        return
+    if not cl.strip().isdigit() or int(cl) != expected:
+        raise RuntimeError(f"Content-Length {cl!r} não corresponde ao esperado ({expected})")
 
 
 class HttpRangeFile(io.RawIOBase):
@@ -33,8 +44,13 @@ class HttpRangeFile(io.RawIOBase):
         self.requests = 0
         req = urllib.request.Request(url, headers={"Range": "bytes=0-0"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            _, _, self.size = _parse_content_range(r)
-            probe = r.read(2)  # pedimos 1 byte; lê no máximo 2 para nunca consumir um corpo inesperado
+            a, b, self.size = _parse_content_range(r)
+            if (a, b) != (0, 0):
+                raise RuntimeError(f"sondagem: Content-Range inesperado (pedido 0-0, recebido {a}-{b}/{self.size})")
+            _check_content_length(r, 1)
+            probe = r.read(1)  # leitura limitada ao 1 byte pedido
+        if len(probe) != 1:
+            raise RuntimeError("sondagem sem corpo: esperado exatamente 1 byte")
         self.requests += 1
         self.bytes_fetched += len(probe)
         self._cache: tuple[int, bytes] = (0, b"")
@@ -61,7 +77,8 @@ class HttpRangeFile(io.RawIOBase):
                 raise RuntimeError(
                     f"Content-Range inesperado: pedido {start}-{end}/{self.size}, recebido {a}-{b}/{total}"
                 )
-            data = r.read(want + 1)  # limite duro: nunca lê mais que o pedido
+            _check_content_length(r, want)
+            data = r.read(want)  # limite duro: nunca lê mais que o pedido
         if len(data) != want:
             raise RuntimeError(f"corpo com {len(data)} bytes; esperado {want} para o intervalo {start}-{end}")
         self.requests += 1
