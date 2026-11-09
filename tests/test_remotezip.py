@@ -130,3 +130,161 @@ n = 2
     rows = read_manifest(tmp_path / "ds" / "manifest.csv")
     assert len(rows) == 6 and {r.generator for r in rows} == {"genA", "genB", "genC"}
     assert all((tmp_path / "ds" / r.path).exists() for r in rows)
+
+
+def _serve(handler_cls):
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_port}/x.zip"
+
+
+def _bad_server(mode):
+    """1ª requisição Range (sondagem) é válida; as seguintes se comportam mal conforme `mode`."""
+    data = _zip_bytes()
+
+    class Bad(http.server.BaseHTTPRequestHandler):
+        calls = 0
+        full_body_sent = 0
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            type(self).calls += 1
+            a, b = self.headers["Range"].split("=")[1].split("-")
+            a, b = int(a), min(int(b), len(data) - 1)
+            if type(self).calls == 1 or mode == "ok":
+                chunk, status, cr = data[a: b + 1], 206, f"bytes {a}-{b}/{len(data)}"
+            elif mode == "later_200":
+                chunk, status, cr = data, 200, None
+                type(self).full_body_sent = len(data)
+            elif mode == "wrong_range":
+                chunk, status, cr = data[0:10], 206, f"bytes 0-9/{len(data)}"
+            elif mode == "short_body":
+                chunk, status, cr = data[a: b + 1][:-5], 206, f"bytes {a}-{b}/{len(data)}"
+            self.send_response(status)
+            if cr:
+                self.send_header("Content-Range", cr)
+            self.send_header("Content-Length", str(len(chunk)))
+            self.end_headers()
+            try:
+                self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    return Bad, *_serve(Bad), len(data)
+
+
+@pytest.mark.parametrize("mode", ["later_200", "wrong_range", "short_body"])
+def test_bad_range_responses_after_probe_are_rejected(mode):
+    Bad, srv, url, total = _bad_server(mode)
+    try:
+        with pytest.raises(RuntimeError):
+            zf, f = open_remote_zip(url)
+            zf.namelist()
+    finally:
+        srv.shutdown()
+
+
+def test_later_200_is_not_read_into_memory():
+    Bad, srv, url, total = _bad_server("later_200")
+    try:
+        from evalkit.remotezip import HttpRangeFile
+
+        f = HttpRangeFile(url)
+        f.seek(0)
+        with pytest.raises(RuntimeError, match="Range"):
+            f.read(100)
+        assert f.bytes_fetched <= 2  # só a sondagem; o corpo de 200 não foi lido
+    finally:
+        srv.shutdown()
+
+
+def test_probe_is_counted_in_transfer_stats(server):
+    url, total = server
+    from evalkit.remotezip import HttpRangeFile
+
+    f = HttpRangeFile(url)
+    assert f.requests == 1 and f.bytes_fetched == 1
+
+
+# --- sondagem estrita e limite de leitura (revisão do PR #1) -----------------------------------
+
+
+class _FakeResp:
+    """Resposta HTTP falsa que registra os tamanhos pedidos a read()."""
+
+    def __init__(self, status=206, headers=None, body=b""):
+        self.status, self.headers, self._body = status, dict(headers or {}), body
+        self.read_sizes = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self, n=-1):
+        self.read_sizes.append(n)
+        out = self._body if n < 0 else self._body[:n]
+        self._body = self._body[len(out):]
+        return out
+
+
+def _fake_urlopen(monkeypatch, *responses):
+    queue = list(responses)
+    monkeypatch.setattr("evalkit.remotezip.urllib.request.urlopen", lambda *a, **k: queue.pop(0))
+
+
+def _good_probe(total=100):
+    return _FakeResp(headers={"Content-Range": f"bytes 0-0/{total}", "Content-Length": "1"}, body=b"P")
+
+
+@pytest.mark.parametrize(
+    "headers, body, msg",
+    [
+        ({"Content-Range": "bytes 5-5/100", "Content-Length": "1"}, b"x", "sondagem"),      # intervalo incorreto
+        ({"Content-Range": "bytes 0-9/100", "Content-Length": "10"}, b"x" * 10, "sondagem"),  # intervalo maior
+        ({"Content-Range": "bytes 0-0/0", "Content-Length": "1"}, b"x", "inválido"),         # tamanho total inválido
+        ({"Content-Range": "bytes 0-0/100"}, b"", "sem corpo"),                               # corpo vazio, sem Content-Length
+        ({"Content-Range": "bytes 0-0/100", "Content-Length": "0"}, b"", "Content-Length"),  # Content-Length incoerente
+        ({"Content-Range": "bytes 0-0/100", "Content-Length": "2"}, b"xx", "Content-Length"),
+    ],
+)
+def test_probe_must_be_exactly_byte_zero(monkeypatch, headers, body, msg):
+    from evalkit.remotezip import HttpRangeFile
+
+    _fake_urlopen(monkeypatch, _FakeResp(headers=headers, body=body))
+    with pytest.raises(RuntimeError, match=msg):
+        HttpRangeFile("http://x/y.zip")
+
+
+def test_probe_reads_at_most_one_byte(monkeypatch):
+    from evalkit.remotezip import HttpRangeFile
+
+    probe = _good_probe()
+    _fake_urlopen(monkeypatch, probe)
+    f = HttpRangeFile("http://x/y.zip")
+    assert probe.read_sizes == [1] and f.size == 100 and f.requests == 1 and f.bytes_fetched == 1
+
+
+def test_fetch_reads_at_most_the_requested_bytes(monkeypatch):
+    from evalkit.remotezip import HttpRangeFile
+
+    # corpo maior que o pedido, sem Content-Length: o cliente só pode pedir `want` bytes
+    body = _FakeResp(headers={"Content-Range": "bytes 10-19/100"}, body=b"A" * 10 + b"EXTRA")
+    _fake_urlopen(monkeypatch, _good_probe(), body)
+    f = HttpRangeFile("http://x/y.zip")
+    assert f._fetch(10, 19) == b"A" * 10
+    assert body.read_sizes == [10]
+
+
+def test_fetch_rejects_wrong_content_length_before_reading_body(monkeypatch):
+    from evalkit.remotezip import HttpRangeFile
+
+    body = _FakeResp(headers={"Content-Range": "bytes 10-19/100", "Content-Length": "11"}, body=b"A" * 11)
+    _fake_urlopen(monkeypatch, _good_probe(), body)
+    f = HttpRangeFile("http://x/y.zip")
+    with pytest.raises(RuntimeError, match="Content-Length"):
+        f._fetch(10, 19)
+    assert body.read_sizes == []  # o corpo nem foi lido
