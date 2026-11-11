@@ -107,7 +107,10 @@ class HttpRangeFile(io.RawIOBase):
                 if e.code not in _RETRY_HTTP:
                     raise
                 last = f"HTTP {e.code}"
-            except (OSError, http.client.IncompleteRead) as e:  # rede, timeout, conexão cortada
+            except http.client.IncompleteRead as e:  # corpo cortado: conta os bytes parciais que chegaram
+                self.bytes_fetched += len(e.partial)
+                last = f"IncompleteRead: {len(e.partial)} bytes recebidos antes do corte"
+            except OSError as e:  # rede, timeout, conexão cortada
                 last = f"{type(e).__name__}: {e}"
             else:
                 self.bytes_fetched += len(data)

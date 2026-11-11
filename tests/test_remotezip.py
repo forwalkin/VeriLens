@@ -407,3 +407,57 @@ def test_permanent_http_error_is_not_retried(monkeypatch):
     with pytest.raises(urllib.error.HTTPError):
         f._fetch(10, 19)
     assert f.retried == 0
+
+
+# --- contabilidade de bytes em respostas cortadas (revisão do PR #2) ---------------------------
+
+
+class _IncompleteResp(_FakeResp):
+    """read() lança IncompleteRead com bytes parciais, como o http.client em corpo chunked cortado."""
+
+    def __init__(self, partial, expected, headers=None):
+        super().__init__(headers=headers)
+        self._partial, self._expected = partial, expected
+
+    def read(self, n=-1):
+        self.read_sizes.append(n)
+        import http.client
+
+        raise http.client.IncompleteRead(self._partial, self._expected)
+
+
+_HDR = {"Content-Range": "bytes 10-409/1000"}  # pedido de 400 bytes, total 1000 (igual ao da sondagem)
+
+
+def test_incomplete_read_partial_bytes_are_counted(monkeypatch):
+    from evalkit.remotezip import HttpRangeFile
+
+    good = _FakeResp(headers=_HDR, body=b"A" * 400)
+    _fake_urlopen_seq(monkeypatch, _good_probe(1000), _IncompleteResp(b"A" * 300, 100, _HDR), good)
+    f = HttpRangeFile("http://x/y.zip", retries=2, backoff=0)
+    assert f._fetch(10, 409) == b"A" * 400
+    assert f.requests == 1 + 2  # sondagem + 1 falha + 1 sucesso
+    assert f.retried == 1
+    assert f.bytes_fetched == 1 + 300 + 400  # sondagem + parcial do IncompleteRead + sucesso
+
+
+def test_short_body_returned_normally_is_still_counted(monkeypatch):
+    from evalkit.remotezip import HttpRangeFile
+
+    short = _FakeResp(headers=_HDR, body=b"A" * 150)  # sem Content-Length: volta curto, sem exceção
+    good = _FakeResp(headers=_HDR, body=b"A" * 400)
+    _fake_urlopen_seq(monkeypatch, _good_probe(1000), short, good)
+    f = HttpRangeFile("http://x/y.zip", retries=2, backoff=0)
+    assert f._fetch(10, 409) == b"A" * 400
+    assert (f.requests, f.retried, f.bytes_fetched) == (3, 1, 1 + 150 + 400)
+
+
+def test_counters_stay_coherent_when_all_attempts_are_incomplete(monkeypatch):
+    from evalkit.remotezip import HttpRangeFile
+
+    bad = [_IncompleteResp(b"A" * 100, 300, _HDR) for _ in range(3)]
+    _fake_urlopen_seq(monkeypatch, _good_probe(1000), *bad)
+    f = HttpRangeFile("http://x/y.zip", retries=2, backoff=0)
+    with pytest.raises(RuntimeError, match="3 tentativas"):
+        f._fetch(10, 409)
+    assert f.requests == 1 + 3 and f.retried == 3 and f.bytes_fetched == 1 + 3 * 100
