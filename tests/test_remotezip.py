@@ -288,3 +288,176 @@ def test_fetch_rejects_wrong_content_length_before_reading_body(monkeypatch):
     with pytest.raises(RuntimeError, match="Content-Length"):
         f._fetch(10, 19)
     assert body.read_sizes == []  # o corpo nem foi lido
+
+
+# --- retentativa de respostas truncadas e falhas temporárias -----------------------------------
+
+
+def _truncating_server(n_truncate):
+    """Sondagem OK; as `n_truncate` primeiras requisições seguintes têm o corpo CORTADO no meio
+    (Content-Length correto, conexão fechada antes do fim), como o Zenodo fez na inspeção real."""
+    data = _zip_bytes()
+
+    class Trunc(http.server.BaseHTTPRequestHandler):
+        calls = 0
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            type(self).calls += 1
+            a, b = self.headers["Range"].split("=")[1].split("-")
+            a, b = int(a), min(int(b), len(data) - 1)
+            chunk = data[a: b + 1]
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {a}-{b}/{len(data)}")
+            self.send_header("Content-Length", str(len(chunk)))
+            self.end_headers()
+            if type(self).calls > 1 and type(self).calls <= 1 + n_truncate:
+                chunk = chunk[: len(chunk) // 4]  # corta e fecha a conexão
+            try:
+                self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    srv, url = _serve(Trunc)
+    return Trunc, srv, url, data
+
+
+def test_truncated_body_is_retried_and_recovers():
+    from evalkit.remotezip import HttpRangeFile
+
+    Trunc, srv, url, data = _truncating_server(n_truncate=2)
+    try:
+        f = HttpRangeFile(url, retries=3, backoff=0)
+        f.seek(0)
+        assert f.read(100) == data[:100]  # recuperou após 2 truncamentos
+        assert f.retried == 2
+        assert f.requests == 1 + 3  # sondagem + 2 falhas + 1 sucesso
+        assert f.bytes_fetched > 1  # conta também os bytes das tentativas truncadas
+    finally:
+        srv.shutdown()
+
+
+def test_truncated_body_gives_up_after_retries():
+    from evalkit.remotezip import HttpRangeFile
+
+    Trunc, srv, url, data = _truncating_server(n_truncate=99)
+    try:
+        f = HttpRangeFile(url, retries=2, backoff=0)
+        f.seek(0)
+        with pytest.raises(RuntimeError, match="3 tentativas"):
+            f.read(100)
+        assert Trunc.calls == 1 + 3  # sondagem + 3 tentativas, nem uma a mais
+    finally:
+        srv.shutdown()
+
+
+@pytest.mark.parametrize("mode", ["later_200", "wrong_range"])
+def test_protocol_violations_are_never_retried(mode):
+    from evalkit.remotezip import HttpRangeFile
+
+    Bad, srv, url, total = _bad_server(mode)
+    try:
+        f = HttpRangeFile(url, retries=5, backoff=0)
+        f.seek(0)
+        with pytest.raises(RuntimeError):
+            f.read(100)
+        assert Bad.calls == 2  # sondagem + 1 única tentativa: sem Range, para na hora
+        assert f.retried == 0
+    finally:
+        srv.shutdown()
+
+
+def _fake_urlopen_seq(monkeypatch, *items):
+    queue = list(items)
+
+    def fake(*a, **k):
+        it = queue.pop(0)
+        if isinstance(it, BaseException):
+            raise it
+        return it
+
+    monkeypatch.setattr("evalkit.remotezip.urllib.request.urlopen", fake)
+
+
+def _http_error(code):
+    import urllib.error
+
+    return urllib.error.HTTPError("http://x/y.zip", code, "erro", {}, None)
+
+
+def test_temporary_http_error_is_retried(monkeypatch):
+    from evalkit.remotezip import HttpRangeFile
+
+    good = _FakeResp(headers={"Content-Range": "bytes 10-19/100", "Content-Length": "10"}, body=b"A" * 10)
+    _fake_urlopen_seq(monkeypatch, _good_probe(), _http_error(503), TimeoutError("lento"), good)
+    f = HttpRangeFile("http://x/y.zip", retries=3, backoff=0)
+    assert f._fetch(10, 19) == b"A" * 10
+    assert f.retried == 2
+
+
+def test_permanent_http_error_is_not_retried(monkeypatch):
+    import urllib.error
+
+    from evalkit.remotezip import HttpRangeFile
+
+    _fake_urlopen_seq(monkeypatch, _good_probe(), _http_error(404))
+    f = HttpRangeFile("http://x/y.zip", retries=3, backoff=0)
+    with pytest.raises(urllib.error.HTTPError):
+        f._fetch(10, 19)
+    assert f.retried == 0
+
+
+# --- contabilidade de bytes em respostas cortadas (revisão do PR #2) ---------------------------
+
+
+class _IncompleteResp(_FakeResp):
+    """read() lança IncompleteRead com bytes parciais, como o http.client em corpo chunked cortado."""
+
+    def __init__(self, partial, expected, headers=None):
+        super().__init__(headers=headers)
+        self._partial, self._expected = partial, expected
+
+    def read(self, n=-1):
+        self.read_sizes.append(n)
+        import http.client
+
+        raise http.client.IncompleteRead(self._partial, self._expected)
+
+
+_HDR = {"Content-Range": "bytes 10-409/1000"}  # pedido de 400 bytes, total 1000 (igual ao da sondagem)
+
+
+def test_incomplete_read_partial_bytes_are_counted(monkeypatch):
+    from evalkit.remotezip import HttpRangeFile
+
+    good = _FakeResp(headers=_HDR, body=b"A" * 400)
+    _fake_urlopen_seq(monkeypatch, _good_probe(1000), _IncompleteResp(b"A" * 300, 100, _HDR), good)
+    f = HttpRangeFile("http://x/y.zip", retries=2, backoff=0)
+    assert f._fetch(10, 409) == b"A" * 400
+    assert f.requests == 1 + 2  # sondagem + 1 falha + 1 sucesso
+    assert f.retried == 1
+    assert f.bytes_fetched == 1 + 300 + 400  # sondagem + parcial do IncompleteRead + sucesso
+
+
+def test_short_body_returned_normally_is_still_counted(monkeypatch):
+    from evalkit.remotezip import HttpRangeFile
+
+    short = _FakeResp(headers=_HDR, body=b"A" * 150)  # sem Content-Length: volta curto, sem exceção
+    good = _FakeResp(headers=_HDR, body=b"A" * 400)
+    _fake_urlopen_seq(monkeypatch, _good_probe(1000), short, good)
+    f = HttpRangeFile("http://x/y.zip", retries=2, backoff=0)
+    assert f._fetch(10, 409) == b"A" * 400
+    assert (f.requests, f.retried, f.bytes_fetched) == (3, 1, 1 + 150 + 400)
+
+
+def test_counters_stay_coherent_when_all_attempts_are_incomplete(monkeypatch):
+    from evalkit.remotezip import HttpRangeFile
+
+    bad = [_IncompleteResp(b"A" * 100, 300, _HDR) for _ in range(3)]
+    _fake_urlopen_seq(monkeypatch, _good_probe(1000), *bad)
+    f = HttpRangeFile("http://x/y.zip", retries=2, backoff=0)
+    with pytest.raises(RuntimeError, match="3 tentativas"):
+        f._fetch(10, 409)
+    assert f.requests == 1 + 3 and f.retried == 3 and f.bytes_fetched == 1 + 3 * 100

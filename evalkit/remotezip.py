@@ -6,8 +6,12 @@ depois, só os bytes dos membros pedidos. Requer que o servidor suporte `Accept-
 
 from __future__ import annotations
 
+import http.client
 import io
 import re
+import sys
+import time
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -37,11 +41,25 @@ def _check_content_length(r, expected: int) -> None:
         raise RuntimeError(f"Content-Length {cl!r} não corresponde ao esperado ({expected})")
 
 
+# Códigos HTTP temporários que justificam nova tentativa. Todo o resto (404, 403...) falha na hora.
+_RETRY_HTTP = {429, 500, 502, 503, 504}
+
+
 class HttpRangeFile(io.RawIOBase):
-    def __init__(self, url: str, block: int = 1 << 20, timeout: int = 60):
+    """Arquivo seekable sobre HTTP Range.
+
+    Respostas TRUNCADAS (corpo menor que o pedido) e falhas de rede/HTTP temporárias são repetidas até
+    `retries` vezes, com espera crescente (`backoff` * 1, 2, 4... s). Violações de protocolo NUNCA são
+    repetidas: resposta que não seja 206, Content-Range ou Content-Length inesperados. Assim, um servidor
+    sem suporte a Range continua parando a execução na hora, em vez de gastar tentativas.
+    """
+
+    def __init__(self, url: str, block: int = 1 << 20, timeout: int = 60, retries: int = 5, backoff: float = 1.0):
         self.url, self.block, self.timeout, self.pos = url, block, timeout, 0
-        self.bytes_fetched = 0
-        self.requests = 0
+        self.retries, self.backoff = retries, backoff
+        self.bytes_fetched = 0  # todos os bytes recebidos, inclusive de tentativas truncadas
+        self.requests = 0  # todas as requisições HTTP, inclusive as repetidas
+        self.retried = 0  # quantas tentativas falharam e foram repetidas
         req = urllib.request.Request(url, headers={"Range": "bytes=0-0"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             a, b, self.size = _parse_content_range(r)
@@ -69,21 +87,42 @@ class HttpRangeFile(io.RawIOBase):
         return self.pos
 
     def _fetch(self, start: int, end: int) -> bytes:
-        req = urllib.request.Request(self.url, headers={"Range": f"bytes={start}-{end}"})
         want = end - start + 1
-        with urllib.request.urlopen(req, timeout=self.timeout) as r:
-            a, b, total = _parse_content_range(r)  # recusa 200 e Content-Range inesperado antes de ler o corpo
-            if (a, b) != (start, end) or total != self.size:
-                raise RuntimeError(
-                    f"Content-Range inesperado: pedido {start}-{end}/{self.size}, recebido {a}-{b}/{total}"
-                )
-            _check_content_length(r, want)
-            data = r.read(want)  # limite duro: nunca lê mais que o pedido
-        if len(data) != want:
-            raise RuntimeError(f"corpo com {len(data)} bytes; esperado {want} para o intervalo {start}-{end}")
-        self.requests += 1
-        self.bytes_fetched += len(data)
-        return data
+        last = "?"
+        for attempt in range(self.retries + 1):
+            if attempt:
+                time.sleep(self.backoff * 2 ** (attempt - 1))
+            req = urllib.request.Request(self.url, headers={"Range": f"bytes={start}-{end}"})
+            self.requests += 1
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    a, b, total = _parse_content_range(r)  # RuntimeError aqui = violação de protocolo: não repete
+                    if (a, b) != (start, end) or total != self.size:
+                        raise RuntimeError(
+                            f"Content-Range inesperado: pedido {start}-{end}/{self.size}, recebido {a}-{b}/{total}"
+                        )
+                    _check_content_length(r, want)
+                    data = r.read(want)  # limite duro: nunca lê mais que o pedido
+            except urllib.error.HTTPError as e:
+                if e.code not in _RETRY_HTTP:
+                    raise
+                last = f"HTTP {e.code}"
+            except http.client.IncompleteRead as e:  # corpo cortado: conta os bytes parciais que chegaram
+                self.bytes_fetched += len(e.partial)
+                last = f"IncompleteRead: {len(e.partial)} bytes recebidos antes do corte"
+            except OSError as e:  # rede, timeout, conexão cortada
+                last = f"{type(e).__name__}: {e}"
+            else:
+                self.bytes_fetched += len(data)
+                if len(data) == want:
+                    return data
+                last = f"corpo truncado: {len(data)} de {want} bytes"
+            self.retried += 1
+            print(
+                f"[remotezip] tentativa {attempt + 1}/{self.retries + 1} falhou ({start}-{end}): {last}",
+                file=sys.stderr,
+            )
+        raise RuntimeError(f"falha ao ler {start}-{end} após {self.retries + 1} tentativas: {last}")
 
     def read(self, n: int = -1) -> bytes:
         if self.pos >= self.size:
